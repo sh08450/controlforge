@@ -1,4 +1,6 @@
 # TrustStack AI GRC — **AI GRC Workbench**
+![TrustStack AI GRC Hero](docs/images/hero.png)
+
 **Tagline:** Config-driven packs → controls → evidence → audit-ready.  
 **Control panel:** TrustStack AI Assurance Hub  
 **Repo:** `controlforge-ai-grc`

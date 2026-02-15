@@ -16,6 +16,10 @@ export async function fetchPacks() {
   return j<{packs:any[]}>(await fetch(`${API_BASE}/api/packs`, { cache: "no-store" }));
 }
 
+export async function fetchPack(domain: string, packId: string, version: string) {
+  return j<any>(await fetch(`${API_BASE}/api/packs/${domain}/${packId}/${version}`, { cache: "no-store" }));
+}
+
 export async function fetchProjects() {
   return j<{projects:any[]}>(await fetch(`${API_BASE}/api/projects`, { cache: "no-store" }));
 }
@@ -32,7 +36,14 @@ export async function fetchProject(projectId: string) {
   return j<any>(await fetch(`${API_BASE}/api/projects/${projectId}`, { cache: "no-store" }));
 }
 
-export async function patchProject(projectId: string, patch: { name?: string; description?: string | null }) {
+export async function patchProject(
+  projectId: string,
+  patch: {
+    name?: string;
+    description?: string | null;
+    selected_packs?: Array<{ domain: string; pack_id: string; version: string }>;
+  }
+) {
   return j<any>(await fetch(`${API_BASE}/api/projects/${projectId}`, {
     method: "PATCH",
     headers: {"content-type":"application/json"},

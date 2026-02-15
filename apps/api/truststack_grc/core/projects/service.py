@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from truststack_grc.config import get_settings
-from truststack_grc.core.mapping.engine import generate_checklist
+from truststack_grc.core.mapping.engine import generate_checklist, summarize
 from truststack_grc.core.packs.loader import PackRegistry
 from truststack_grc.core.storage.filesystem import FileSystemStorage
 from truststack_grc.core.storage.hashing import sha256_text
@@ -44,14 +44,7 @@ class ProjectService:
             scope_answers=req.get("scope_answers") or {},
         )
 
-        # Load packs
-        reg = PackRegistry.from_env()
-        packs = []
-        for p in req.get("selected_packs", []):
-            pack = reg.load_pack(domain=p["domain"], pack_id=p["pack_id"], version=p["version"])
-            if not pack:
-                raise ValueError(f"Unknown pack: {p}")
-            packs.append(pack)
+        packs, normalized_selected_packs = self._load_packs(req.get("selected_packs", []))
 
         checklist = generate_checklist(context=context, packs=packs)
 
@@ -74,7 +67,7 @@ class ProjectService:
                 "industry_id": req["industry_id"],
                 "segment_id": req["segment_id"],
                 "use_case_id": req["use_case_id"],
-                "selected_packs": req.get("selected_packs", []),
+                "selected_packs": normalized_selected_packs,
                 "scope_answers": req.get("scope_answers", {}),
             },
             "context": context,
@@ -98,6 +91,23 @@ class ProjectService:
         self.storage.append_audit(project_id, "project.created", actor, {"project": {"id": project_id, "name": req["name"]}})
 
         return {"project": project_doc["project"], "project_id": project_id}
+
+    def _load_packs(self, selected_packs: list[dict[str, Any]]) -> tuple[list[Any], list[dict[str, str]]]:
+        reg = PackRegistry.from_env()
+        loaded = []
+        normalized = []
+        for p in selected_packs:
+            entry = {
+                "domain": p["domain"],
+                "pack_id": p["pack_id"],
+                "version": p["version"],
+            }
+            pack = reg.load_pack(domain=entry["domain"], pack_id=entry["pack_id"], version=entry["version"])
+            if not pack:
+                raise ValueError(f"Unknown pack: {entry}")
+            loaded.append(pack)
+            normalized.append(entry)
+        return loaded, normalized
 
     def update_checklist_item(self, project_id: str, item_id: str, patch: dict[str, Any], actor: str) -> dict[str, Any] | None:
         proj = self.storage.read_project(project_id)
@@ -131,16 +141,67 @@ class ProjectService:
         if not proj:
             return None
 
-        editable_fields = {"name", "description"}
-        before = {k: proj.get("project", {}).get(k) for k in editable_fields}
-        for key in editable_fields:
+        before = {
+            "name": proj.get("project", {}).get("name"),
+            "description": proj.get("project", {}).get("description"),
+            "selected_packs": proj.get("inputs", {}).get("selected_packs", []),
+        }
+
+        for key in {"name", "description"}:
             if key in patch:
                 proj["project"][key] = patch[key]
+
+        checklist_changed = False
+        if "selected_packs" in patch:
+            selected_packs = patch.get("selected_packs") or []
+            packs, normalized_selected_packs = self._load_packs(selected_packs)
+            context = proj.get("context", {})
+            regenerated = generate_checklist(context=context, packs=packs)
+
+            prior = self.storage.read_checklist(project_id) or {}
+            prior_items = {it.get("item_id"): it for it in prior.get("items", [])}
+            for item in regenerated["items"]:
+                previous = prior_items.get(item.get("item_id"))
+                if not previous:
+                    continue
+                for k in ["status", "owner", "notes", "evidence"]:
+                    item[k] = previous.get(k)
+
+            regenerated["counts"] = summarize(regenerated["items"])
+
+            proj.setdefault("inputs", {})["selected_packs"] = normalized_selected_packs
+            taxonomy = TaxonomyLoader.from_env()
+            proj.setdefault("generated", {})["taxonomy_hash"] = sha256_text(str(taxonomy.list_industries()))
+            proj["generated"]["packs_hash"] = sha256_text(
+                "|".join([f"{p.pack.domain}:{p.pack.id}:{p.pack.version}:{p.hash}" for p in packs])
+            )
+            proj["generated"]["checklist_hash"] = sha256_text(
+                str([(i["merge_key"], i["severity"], i["title"]) for i in regenerated["items"]])
+            )
+
+            checklist_doc = {
+                "project_id": project_id,
+                "generated_at": utc_now(),
+                "items": regenerated["items"],
+                "counts": regenerated["counts"],
+            }
+            self.storage.write_checklist(project_id, checklist_doc)
+            checklist_changed = True
+
         proj["project"]["updated_at"] = utc_now()
-        after = {k: proj.get("project", {}).get(k) for k in editable_fields}
+        after = {
+            "name": proj.get("project", {}).get("name"),
+            "description": proj.get("project", {}).get("description"),
+            "selected_packs": proj.get("inputs", {}).get("selected_packs", []),
+        }
 
         self.storage.write_project(project_id, proj)
-        self.storage.append_audit(project_id, "project.updated", actor, {"before": before, "after": after})
+        self.storage.append_audit(
+            project_id,
+            "project.updated",
+            actor,
+            {"before": before, "after": after, "checklist_regenerated": checklist_changed},
+        )
         return proj
 
     def delete_project(self, project_id: str, actor: str) -> dict[str, Any] | None:

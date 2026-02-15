@@ -1,5 +1,5 @@
-project_id: my-ai-system-20260215-021932
-generated_at: '2026-02-15T02:19:32.988162+00:00'
+project_id: my-ai-system-20260215-023345
+generated_at: '2026-02-15T02:33:45.848899+00:00'
 items:
 - item_id: 1404653f95e0f4be
   merge_key: CTRL-SAF-0001
@@ -28,7 +28,7 @@ items:
   test_procedures:
   - Confirm system card includes intended use, limitations, known failure modes, and
     escalation paths.
-  status: not_started
+  status: in_progress
   owner: null
   notes: null
   evidence: []

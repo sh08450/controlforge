@@ -27,6 +27,7 @@ class CreateProjectRequest(BaseModel):
 class PatchProjectRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    selected_packs: list[SelectedPack] | None = None
 
 @router.get("")
 def list_projects():
@@ -70,7 +71,10 @@ def patch_project(project_id: str, req: PatchProjectRequest, x_user: str | None 
         patch["name"] = name
     if "description" in patch and isinstance(patch["description"], str):
         patch["description"] = patch["description"].strip() or None
-    updated = service.update_project(project_id, patch, actor=x_user or "anonymous")
+    try:
+        updated = service.update_project(project_id, patch, actor=x_user or "anonymous")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not updated:
         raise HTTPException(status_code=404, detail="Project not found")
     return updated

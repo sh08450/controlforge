@@ -1,0 +1,69 @@
+project_id: my-ai-system-20260215-024444
+generated_at: '2026-02-15T02:44:44.225612+00:00'
+items:
+- item_id: accb47df12224432
+  merge_key: CTRL-SAF-0002
+  canonical_id: CTRL-SAF-0002
+  title: Maintain a Dataset Sheet for key training/retrieval datasets
+  objective: Document dataset sources, access, transformations, and risks.
+  severity: medium
+  category: Documentation
+  domain: safety
+  pack_refs:
+  - domain: safety
+    pack_id: model-documentation
+    version: '1.0'
+    control_id: DOC02
+    source:
+      name: Community
+      reference: Documentation best practices for AI systems (model/system/dataset
+        docs)
+      url: null
+    pack_hash: a2c9a235f61e9c908302b859a46d753d717f6edc351b4e6c05c21b4f6c821428
+  why_applies: 'Triggered by: pattern.rag == True (resolved True == True)'
+  evidence_required:
+  - type: document
+    name: Dataset Sheet(s)
+  test_procedures:
+  - Validate dataset sheets include provenance, consent/license checks, and retention.
+  status: not_started
+  owner: null
+  notes: null
+  evidence: []
+- item_id: 1404653f95e0f4be
+  merge_key: CTRL-SAF-0001
+  canonical_id: CTRL-SAF-0001
+  title: Maintain a System Card for the AI system
+  objective: Capture intended use, capabilities, limitations, safety mitigations,
+    and monitoring.
+  severity: medium
+  category: Documentation
+  domain: safety
+  pack_refs:
+  - domain: safety
+    pack_id: model-documentation
+    version: '1.0'
+    control_id: DOC01
+    source:
+      name: Community
+      reference: Documentation best practices for AI systems (model/system/dataset
+        docs)
+      url: null
+    pack_hash: a2c9a235f61e9c908302b859a46d753d717f6edc351b4e6c05c21b4f6c821428
+  why_applies: 'Triggered by: exists(system.name)'
+  evidence_required:
+  - type: document
+    name: System Card (approved)
+  test_procedures:
+  - Confirm system card includes intended use, limitations, known failure modes, and
+    escalation paths.
+  status: not_started
+  owner: null
+  notes: null
+  evidence: []
+counts:
+  total: 2
+  by_domain:
+    safety: 2
+  by_status:
+    not_started: 2

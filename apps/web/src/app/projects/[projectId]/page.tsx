@@ -1,9 +1,39 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { deleteProject, fetchChecklist, fetchProject, patchChecklistItem, patchProject, reportUrl, uploadEvidence } from "../../../lib/api";
+import { deleteProject, fetchChecklist, fetchPack, fetchPacks, fetchProject, patchChecklistItem, patchProject, reportUrl, uploadEvidence } from "../../../lib/api";
 
 const STATUS = ["not_started", "in_progress", "implemented", "not_applicable", "risk_accepted"];
+type SelectedPack = { domain: string; pack_id: string; version: string };
+type PackDetail = {
+  pack: {
+    id: string;
+    name: string;
+    version: string;
+    domain: string;
+    description?: string;
+    source?: { name?: string; reference?: string; url?: string };
+  };
+};
+
+function packKey(domain: string, packId: string) {
+  return `${domain}/${packId}`;
+}
+
+function latestVersion(versions: string[]) {
+  return [...versions].sort().slice(-1)[0] || "";
+}
+
+function normalizePackSelection(packs: SelectedPack[]) {
+  return packs
+    .map((p) => `${p.domain}|${p.pack_id}|${p.version}`)
+    .sort()
+    .join("||");
+}
+
+function packVersionKey(domain: string, packId: string, version: string) {
+  return `${domain}/${packId}/${version}`;
+}
 
 function sevBadge(sev: string) {
   const styles: Record<string, React.CSSProperties> = {
@@ -25,6 +55,9 @@ export default function ProjectPage({ params }: { params: { projectId: string } 
   const [editDescription, setEditDescription] = useState("");
   const [savingProject, setSavingProject] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
+  const [packCatalog, setPackCatalog] = useState<any[]>([]);
+  const [selectedPacks, setSelectedPacks] = useState<Record<string, SelectedPack>>({});
+  const [packDetails, setPackDetails] = useState<Record<string, PackDetail>>({});
 
   async function refresh() {
     setErr(null);
@@ -40,11 +73,81 @@ export default function ProjectPage({ params }: { params: { projectId: string } 
   useEffect(() => { refresh(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetchPacks();
+        setPackCatalog(res.packs || []);
+      } catch (e: any) {
+        setErr(e.message || String(e));
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const latestTargets = (packCatalog || [])
+        .map((p) => {
+          const versions: string[] = p.versions || [];
+          const version = latestVersion(versions);
+          if (!version) return null;
+          return { domain: p.domain, pack_id: p.pack_id, version };
+        })
+        .filter(Boolean) as SelectedPack[];
+      const missing = latestTargets.filter((p) => !packDetails[packVersionKey(p.domain, p.pack_id, p.version)]);
+      if (missing.length === 0) return;
+      try {
+        const loaded = await Promise.all(
+          missing.map((p) => fetchPack(p.domain, p.pack_id, p.version))
+        );
+        setPackDetails((prev) => {
+          const next = { ...prev };
+          loaded.forEach((d: PackDetail) => {
+            const k = packVersionKey(d.pack.domain, d.pack.id, d.pack.version);
+            next[k] = d;
+          });
+          return next;
+        });
+      } catch {
+        // Non-blocking; informational links are best-effort.
+      }
+    })();
+  }, [packCatalog, packDetails]);
+
+  useEffect(() => {
+    (async () => {
+      const targets = Object.values(selectedPacks);
+      const missing = targets.filter((p) => !packDetails[packVersionKey(p.domain, p.pack_id, p.version)]);
+      if (missing.length === 0) return;
+      try {
+        const loaded = await Promise.all(
+          missing.map((p) => fetchPack(p.domain, p.pack_id, p.version))
+        );
+        setPackDetails((prev) => {
+          const next = { ...prev };
+          loaded.forEach((d: PackDetail) => {
+            const k = packVersionKey(d.pack.domain, d.pack.id, d.pack.version);
+            next[k] = d;
+          });
+          return next;
+        });
+      } catch {
+        // Non-blocking; the page still works without educational metadata.
+      }
+    })();
+  }, [selectedPacks, packDetails]);
+
+  useEffect(() => {
     const p = project?.project;
     if (!p) return;
     setEditName(p.name || "");
     setEditDescription(p.description || "");
-  }, [project?.project?.id, project?.project?.updated_at]);
+    const current = (project?.inputs?.selected_packs || []) as SelectedPack[];
+    const next: Record<string, SelectedPack> = {};
+    for (const sp of current) {
+      next[packKey(sp.domain, sp.pack_id)] = sp;
+    }
+    setSelectedPacks(next);
+  }, [project?.project?.id, project?.project?.updated_at, project?.inputs?.selected_packs]);
 
   const counts = checklist?.counts || {};
   const items: any[] = checklist?.items || [];
@@ -57,9 +160,78 @@ export default function ProjectPage({ params }: { params: { projectId: string } 
 
   const currentName = project?.project?.name || "";
   const currentDescription = project?.project?.description || "";
+  const currentSelectedPackList = ((project?.inputs?.selected_packs || []) as SelectedPack[]);
+  const selectedPackList = useMemo(() => Object.values(selectedPacks), [selectedPacks]);
+  const packsChanged = normalizePackSelection(selectedPackList) !== normalizePackSelection(currentSelectedPackList);
   const canSaveProject =
     Boolean(editName.trim()) &&
-    (editName.trim() !== currentName || editDescription !== currentDescription);
+    (editName.trim() !== currentName || editDescription !== currentDescription || packsChanged);
+
+  const knownPackKeys = useMemo(
+    () => new Set(packCatalog.map((p) => packKey(p.domain, p.pack_id))),
+    [packCatalog]
+  );
+  const unavailableSelectedPacks = selectedPackList.filter((p) => !knownPackKeys.has(packKey(p.domain, p.pack_id)));
+  const educationalByDomain = useMemo(() => {
+    const domainText: Record<string, string> = {
+      governance: "Governance packs cover regulatory obligations, accountability, and risk management frameworks.",
+      safety: "Safety packs focus on model behavior, documentation, monitoring, and harm mitigation controls.",
+      security: "Security packs address threats, vulnerabilities, and protective controls for AI systems and data.",
+    };
+    const grouped: Record<string, Array<{ domain: string; pack_id: string; version: string; detail?: PackDetail }>> = {
+      governance: [],
+      safety: [],
+      security: [],
+    };
+
+    for (const p of packCatalog) {
+      const versions: string[] = p.versions || [];
+      const version = latestVersion(versions);
+      if (!version) continue;
+      const d = packDetails[packVersionKey(p.domain, p.pack_id, version)];
+      if (!grouped[p.domain]) grouped[p.domain] = [];
+      grouped[p.domain].push({ domain: p.domain, pack_id: p.pack_id, version, detail: d });
+    }
+
+    return [
+      { domain: "governance", title: "Governance Standards", intro: domainText.governance, items: grouped.governance || [] },
+      { domain: "safety", title: "Safety Standards", intro: domainText.safety, items: grouped.safety || [] },
+      { domain: "security", title: "Security Standards", intro: domainText.security, items: grouped.security || [] },
+    ];
+  }, [packCatalog, packDetails]);
+
+  async function saveSelectedPacks(nextSelectedPacks: SelectedPack[]) {
+    setErr(null);
+    setSavingProject(true);
+    try {
+      await patchProject(projectId, { selected_packs: nextSelectedPacks });
+      await refresh();
+    } catch (e: any) {
+      setErr(e.message || String(e));
+      await refresh();
+    } finally {
+      setSavingProject(false);
+    }
+  }
+
+  async function togglePack(domain: string, pack_id: string, versions: string[]) {
+    const key = packKey(domain, pack_id);
+    const next = { ...selectedPacks };
+    if (next[key]) {
+      delete next[key];
+    } else {
+      next[key] = { domain, pack_id, version: latestVersion(versions) };
+    }
+    setSelectedPacks(next);
+    await saveSelectedPacks(Object.values(next));
+  }
+
+  async function setPackVersion(domain: string, pack_id: string, version: string) {
+    const key = packKey(domain, pack_id);
+    const next = { ...selectedPacks, [key]: { domain, pack_id, version } };
+    setSelectedPacks(next);
+    await saveSelectedPacks(Object.values(next));
+  }
 
   async function onSaveProject() {
     setErr(null);
@@ -68,6 +240,7 @@ export default function ProjectPage({ params }: { params: { projectId: string } 
       await patchProject(projectId, {
         name: editName.trim(),
         description: editDescription.trim() ? editDescription.trim() : null,
+        selected_packs: selectedPackList,
       });
       await refresh();
     } catch (e: any) {
@@ -161,9 +334,121 @@ export default function ProjectPage({ params }: { params: { projectId: string } 
             />
           </div>
         </div>
+
+        <hr />
+        <h3 style={{marginTop: 0}}>Selected Packs</h3>
+        <div className="small">
+          Add, remove, or change pack versions. Checklist updates immediately while keeping progress for unchanged controls.
+        </div>
+        <div className="grid" style={{marginTop: 12, marginBottom: 12}}>
+          {packCatalog.map((p) => {
+            const key = packKey(p.domain, p.pack_id);
+            const checked = Boolean(selectedPacks[key]);
+            const versions: string[] = p.versions || [];
+            return (
+              <div key={key} className="card" style={{padding: 12}}>
+                <div className="hstack" style={{justifyContent: "space-between"}}>
+                  <div>
+                    <div style={{fontWeight: 700}}>{p.pack_id}</div>
+                    <div className="small"><span className="badge">{p.domain}</span> {versions.length} version(s)</div>
+                  </div>
+                  <button
+                    className={"btn " + (checked ? "btnDanger" : "btnPrimary")}
+                    onClick={() => togglePack(p.domain, p.pack_id, versions)}
+                    disabled={savingProject || deletingProject}
+                  >
+                    {checked ? "Remove" : "Add"}
+                  </button>
+                </div>
+                {checked && (
+                  <div style={{marginTop: 10}}>
+                    <label>Version</label>
+                    <select
+                      value={selectedPacks[key].version}
+                      onChange={(e) => setPackVersion(p.domain, p.pack_id, e.target.value)}
+                      disabled={savingProject || deletingProject}
+                    >
+                      {versions.map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {unavailableSelectedPacks.length > 0 && (
+          <div className="card" style={{marginBottom: 12, borderColor: "#fed7aa", background: "#fff7ed"}}>
+            <div style={{fontWeight: 700, marginBottom: 6}}>Unavailable selected packs</div>
+            <div className="small" style={{marginBottom: 8}}>
+              These packs are currently selected in this project but were not found in the pack registry.
+            </div>
+            <div className="grid">
+              {unavailableSelectedPacks.map((sp) => (
+                <div key={packKey(sp.domain, sp.pack_id)} className="hstack" style={{justifyContent: "space-between"}}>
+                  <div className="small">
+                    <code>{sp.domain}/{sp.pack_id}</code> · version <code>{sp.version}</code>
+                  </div>
+                  <button
+                    className="btn btnDanger"
+                    onClick={() => togglePack(sp.domain, sp.pack_id, [sp.version])}
+                    disabled={savingProject || deletingProject}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <hr />
+        <h3 style={{marginTop: 0}}>Pack Learning Center</h3>
+        <div className="small" style={{marginBottom: 10}}>
+          Learn what each standard covers and open the source publication for deeper guidance.
+        </div>
+        <div className="grid" style={{marginBottom: 12}}>
+          {educationalByDomain.map((group) => (
+            <div key={group.domain} className="card" style={{padding: 12}}>
+              <h4 style={{margin: 0}}>{group.title}</h4>
+              <div className="small" style={{marginTop: 4, marginBottom: 8}}>{group.intro}</div>
+              <div className="grid">
+                {group.items.map((it) => {
+                  const meta = it.detail?.pack;
+                  const source = meta?.source || {};
+                  return (
+                    <div key={`${it.domain}/${it.pack_id}/${it.version}`} className="card" style={{padding: 12}}>
+                      <div className="hstack" style={{justifyContent: "space-between"}}>
+                        <div style={{fontWeight: 700}}>{meta?.name || it.pack_id}</div>
+                        <span className="badge">{it.version}</span>
+                      </div>
+                      <div className="small" style={{marginTop: 6}}>
+                        {meta?.description || "Standard pack for this domain."}
+                      </div>
+                      <div className="small" style={{marginTop: 8}}>
+                        <strong>Source:</strong> {source.name || "Reference"}{source.reference ? ` - ${source.reference}` : ""}
+                      </div>
+                      <div className="hstack" style={{marginTop: 8}}>
+                        {source.url ? (
+                          <a className="btn" href={source.url} target="_blank" rel="noreferrer">Learn More</a>
+                        ) : (
+                          <span className="small">No public source URL provided.</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {group.items.length === 0 && (
+                  <div className="small">No {group.domain} packs available in the registry.</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
         <div className="hstack" style={{justifyContent: "space-between"}}>
           <div className="small">
-            Rename project or update description. Delete permanently removes project files and evidence.
+            Modify project details and selected packs. Delete permanently removes project files and evidence.
           </div>
           <div className="hstack">
             <button
