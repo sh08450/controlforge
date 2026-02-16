@@ -131,6 +131,7 @@ The pack registry discovers it automatically at runtime.
 - [Security Standards (17)](docs/standards/security/README.md)
 
 ### Governance
+![ISO/IEC JTC 1/SC 42](docs/images/image.png)
 - [EU — AI Act (Regulation (EU) 2024/1689)](docs/standards/governance/eu-ai-act.md)
 - [NIST — AI Risk Management Framework (AI RMF 1.0)](docs/standards/governance/nist-ai-rmf.md)
 - [ISO/IEC 42001:2023 — AI Management System (AIMS)](docs/standards/governance/gov-03-iso-iec-42001-2023-ai-management-system-aims.md)
